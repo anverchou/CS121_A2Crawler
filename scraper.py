@@ -96,81 +96,8 @@ runningTotal = 0
 #################################
 
 def scraper(url, resp):
-    """Main scraping function with trap detection and data collection"""
     links = extract_next_links(url, resp)
-    valid_links = [link for link in links if is_valid(link)]
-
-    # Handle non-200 status codes
-    if resp.status != 200:
-        return valid_links  # Always return valid links, even if status is not 200
-
-    # Store the actual URL 
-    scrapped_url = resp.url
-    # Parse the scrapped url
-    parsed_url = urlparse(scrapped_url)
-    # Defrag the parsed url
-    defrag_url = parsed_url._replace(fragment="").geturl()
-
-    # Check if the URL is valid and has not already been crawled
-    if is_valid(defrag_url) and defrag_url not in unique_pages:
-        # Store the raw HTML content of the page
-        content = resp.raw_response.content
-
-        # Size Limitation to prevent excessive processing time and memory usage
-        if len(content) > 2*1024*1024:   # 2MB
-            return valid_links
-        
-        # Extract readable text from the page
-        soup = BeautifulSoup(content, 'html.parser')
-        text = soup.get_text()  # Store the text
-
-        # Create a hash of the text
-        content_hash = get_content_hash(text)
-        # Check if the hash has already been processed
-        if content_hash in content_hashes:
-            return valid_links  # Skip near-duplicates
-        # If not a duplicate, add the hash to track processed content
-        content_hashes.add(content_hash)
-
-        # Process all alphabetic words and convert it to lowercase
-        words = re.findall(r'[a-zA-Z]+', text.lower())
-        # Store the number of words
-        word_count = len(words)
-
-        # Skip empty pages
-        if word_count == 0:
-            return valid_links
-        
-        # Update with the longest page encountered
-        unique_pages.add(defrag_url)  # Add the defragged URL to prevent revisiting
-        # Update the longest page if the current page has more words than the previous
-        if word_count > longest_page["count"]:
-            longest_page["url"] = defrag_url
-            longest_page["count"] = word_count
-        
-        # Remove common stop words 
-        filtered_words = [word for word in words if word not in stop_words]
-        # Iterate to count occurrences of each word
-        for word in filtered_words:
-            word_freq[word] += 1
-
-        # Track subdomains 
-        parsed_defrag = urlparse(defrag_url)  # Parse defragmented URL
-        netloc = parsed_defrag.netloc.lower()  # Extract the domain name and make it lowercase
-        # Ensure domain is part of ics.uci.edu and exclude main domain
-        if netloc.endswith('.ics.uci.edu') and netloc != 'ics.uci.edu':
-            subdomains[netloc].add(defrag_url)
-    
-    # Handle 3xx redirects
-    elif 300 <= resp.status < 400:
-        # If status is 300, get the Location header
-        redirect_url = resp.headers.get('Location')
-        # If the redirected URL is valid
-        if redirect_url and is_valid(redirect_url):
-            return [redirect_url]  # Return the redirected URL
-
-    # Always return valid links
-    return valid_links
+    return [link for link in links if is_valid(link)]
 
 def extract_next_links(url, resp):
     # Implementation required.
