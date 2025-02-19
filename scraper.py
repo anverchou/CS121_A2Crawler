@@ -5,18 +5,20 @@ from urllib.parse import urlparse, urldefrag, urljoin # https://docs.python.org/
 from bs4 import BeautifulSoup # https://beautiful-soup-4.readthedocs.io/en/latest/
 from collections import defaultdict # https://docs.python.org/3/library/collections.html
 from urllib.robotparser import RobotFileParser # https://docs.python.org/3/library/urllib.robotparser.html
-from simhash import simhash # https://algonotes.readthedocs.io/en/latest/Simhash.html
+from simhash import Simhash # https://algonotes.readthedocs.io/en/latest/Simhash.html
 from hashlib import md5 # https://docs.python.org/3/library/hashlib.html
 
-#
-# Global Data Structures
-#
+#################################
+# ------ GLOBAL DATA -----------#
+#################################
 
-# Download NLTK stopwords
+# Download the NLTK stopwords corpus
 nltk.download('stopwords')
+
 # Set of stopwords from NLTK
 STOP_WORDS = set(stopwords.words('english'))
-# Extra stop words from ranks.nl (used long list)
+
+# Additional stop words from ranks.nl (used long list)
 ADDITIONAL_STOP_WORDS = {
     "a", "able", "about", "above", "abst", "accordance", "according", "accordingly", "across", "act", "actually", "added", "adj", "affected", "affecting", "affects", "after", "afterwards", "again", 
     "against", "ah", "all", "almost", "alone", "along", "already", "also", "although", "always", "am", "among", "amongst", "an", "and", "announce", "another", "any", "anybody", "anyhow", "anymore", 
@@ -48,45 +50,53 @@ ADDITIONAL_STOP_WORDS = {
     "yet", "you", "youd", "you'll", "your", "youre", "yours", "yourself", "yourselves", "you've", "z", "zero"
 }
 
-# Download the additional stop words
-stop_Words = stop_Words.union(ADDITIONAL_STOP_WORDS)
-count_Words = defaultdict(int) # Map between words and their frequencies
-words_In_Page = {} # Map for number_of_words -> URL
-uniqueCounter = [] # Array of all unique URLs encounters in the crawl
-totalePageCounter = 0 # Counter for total pages processed
-seen_hashes = set() # Exact duplicates
-seen_simhashes = [] # Store simhash values 
-simhash_threshhold = 5 # Hamming distance between 5 for near duplicates
-robot_parsers = {} # Robot Parser
+# Download the additonal stopwords
+STOP_WORDS = STOP_WORDS.union(ADDITIONAL_STOP_WORDS)
+# Dictionary between words and their frequencies
+count_Words = defaultdict(int)
+# Dictionary for number_of_words
+words_In_Page = {}
+# List of all unique URLs encountered during crawl
+uniqueCounter = []
+# Counter for total pages processed 
+totalePageCounter = 0
+# Store exact hashes to detect duplicates
+seen_hashes = set()
+# List of Simhash values to detect near-duplicates
+seen_simhashes = []
+# Hamming distance threshold for near-duplicates
+simhash_threshhold = 5
+# Cache RobotFileParser objects by domain
+robot_parsers = {}
 
-# Avoid these file extenstions
-bad_URL = ["pdf", "ppt", "pptx", "png", "zip", "jpeg", "jpg", "ppsx", "war", "img", "apk"]
-
-#Allowed domains to crawl
-allowed_URLS = [
-    r'^.+\.ics\.uci\.edu(/.*)?$',
-    r'^.+\.cs\.uci\.edu(/.*)?$',
-    r'^.+\.informatics\.uci\.edu(/.*)?$',
-    r'^.+\.stat\.uci\.edu(/.*)?$'
+# List of file extensions to avoid
+bad_URL = [
+    "pdf", "ppt", "pptx", "png", "zip", "jpeg", "jpg",
+    "ppsx", "war", "img", "apk", "css", "js"
 ]
-allowed_URLS_REGEXES = [re.compile(regex) for regex in allowed_URLS]
 
+# Allowed domains
+allowed_URLS = [
+    r'^([A-Za-z0-9-]+\.)*ics\.uci\.edu(/.*)?$',
+    r'^([A-Za-z0-9-]+\.)*cs\.uci\.edu(/.*)?$',
+    r'^([A-Za-z0-9-]+\.)*informatics\.uci\.edu(/.*)?$',
+    r'^([A-Za-z0-9-]+\.)*stat\.uci\.edu(/.*)?$'
+]
+# Compile the domains with regex
+allowed_URLS_REGEXES = [re.compile(regex) for regex in allowed_URLS]
 # Capture only alphabetic words
 alphanumerical_Words = re.compile(r'[a-zA-Z]+')
-
-# Threshold for low content pages (page should have over 100 words)
-min_word_threshold = 100
-
-# Unique Links Encountered
+# Skip pages with fewer than 70 words (too low content)
+min_word_threshold = 70
+# Tracker for number of how many unique links discovered
 runningTotal = 0
 
-##########################
-# ------ Scraper ------- #
-##########################
+#################################
+# ----------- SCRAPER ----------#
+#################################
+
 def scraper(url, resp):
-    #Extract potential links
     links = extract_next_links(url, resp)
-    # Filter links by is_valid
     return [link for link in links if is_valid(link)]
 
 def extract_next_links(url, resp):
@@ -102,7 +112,8 @@ def extract_next_links(url, resp):
     
     # Convert relative URL to absolute URL
     absolute_url = urljoin(resp.url, url)
-    # Decide if we need to parse the url more
+
+    # Decide if we parse further
     if not decideWhetherToExtractInfo(resp, absolute_url):
         return []
 
@@ -111,67 +122,80 @@ def extract_next_links(url, resp):
     allText = soup.get_text()
 
     # Check for duplicates
-    if is_duplicate(alltext, absolute_url):
-        print(f"[Duplicate/Trap] : {absolute_url}")
+    if is_duplicate(allText, absolute_url):
+        print(f"[Duplicate/Trap]: {absolute_url}")
         return []
 
-    # Token text 
+    # Tokenize text
     parsedText = checkForContent(allText)
-    #Count how many valid words the page has
-    word_count = all_Count(parsedText, 0)
+    # Initialize word counter
+    counter = 0
+    word_count = all_count(parsedText, counter)
 
-    # If word count is below threshhold, consider it as low content and skip
+    # If word count is below threshold, consider it as low content and skip
     if word_count < min_word_threshold:
+        print(f"[Low Content] Skipping {absolute_url} (only {word_count} words).")
         return []
 
-    # Store the page in the words_In_Page dictioknary
+    # Store for "longest page" 
     words_In_Page[word_count] = absolute_url
 
-    #Extract outgoing URLs from the page
+    # Extract outgoing URLs from the page
     listOfLinks = getAllUrls(soup)
     return listOfLinks
 
-##########################
-# ------ Validation -----#
-##########################
+#################################
+# --------- VALIDATION ---------#
+#################################
+
 def is_valid(url):
+    """
     # Decide whether to crawl this url or not. 
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
     try:
-        # Parse the URL
+    # Parse the URL
+    """
+    # Parse the URL
+    try:
         parsed = urlparse(url)
-        # Only allow http/htps
-        if parsed.scheme not in set(["http", "https"]):
+
+        # Only allow http or https
+        if parsed.scheme not in {"http", "https"}:
             return False
-        # Check agasint allowed domain patterns
+
+        # Must match an allowed domain pattern
         if not any(r.match(parsed.netloc.lower()) for r in allowed_URLS_REGEXES):
             return False
+
         # Check for bad file extensions
         for ext in bad_URL:
             if ext in url.lower():
                 return False
-            
+
         if re.search(
-            r".*\.(css|js|bmp|gif|jpe?g|ico"
+            r"\.(css|js|bmp|gif|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
             + r"|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf"
             + r"|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names"
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
-            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", 
+            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$",
             parsed.path.lower()
         ):
             return False
 
-    except TypeError:
-        print ("TypeError for ", parsed)
-        raise
+        # If all checks pass:
+        return True
 
-#####################################
-# ----- Duplcation Detection ------ #
-#####################################
+    except TypeError:
+        print("TypeError for ", url)
+        return False
+
+#################################
+# ------- DUPLICATION CHECK ----#
+#################################
 # ----- Citation ------ #
 # Title: Pythonic python 1: Hamming distance
 # Author: Clares Loggett
@@ -182,26 +206,25 @@ def is_valid(url):
 #######################################
 
 def compute_md5(text: str) -> str:
-    """
-    Return the hex MD5 digest of the page text.
-    """
+    """Return MD5 hex digest of text."""
+    # Convert the string into UTF-8 bytes
+    # Use md5 to compute the checksum for these bytes
+    # Hexigest returns the check as a readable hexadecimal string
     return md5(text.encode('utf-8')).hexdigest()
 
 def compute_simhash(text: str) -> int:
-    """
-    Compute Simhash of the clean text
-    """
-
-    # Tokenization
+    """Compute 64-bit Simhash for the text."""
+    # Convert and split text into a list of tokens
     tokens = text.lower().split()
-    # Conver to integer
-    return simhash(tokens)
+    # Create a Simhash object from the list of the tokens
+    return Simhash(tokens).value
 
 def hamming_distance(sh1: int, sh2: int) -> int:
-    """
-    Compute hamming distance between two 64-bit integers.
-    """
+    """Compute Hamming distance between two 64-bit integers."""
+    # XOR the two integers so that bits that are different become 1 and bits that match become 0
     x = sh1 ^ sh2
+    # Convert x to its binary representation as a string
+    # Return count as hamming distance
     return bin(x).count('1')
 
 def is_duplicate(current_text: str, url: str) -> bool:
@@ -209,72 +232,69 @@ def is_duplicate(current_text: str, url: str) -> bool:
     Check if page is an exact duplicate
     If not exact, check near duplicate
     """
-    # Use global set/lists 
+    # Use global set/lists
     global seen_hashes, seen_simhashes
 
-    # Exact Duplicate Check
+    # Exact Duplicates 
     # Compute an MD5 checksum of the current page's text
     page_md5 = compute_md5(current_text)
-    # If already seeve, the page is an exact duplicate
+    # If already seen, the page is an exact duplicate
     if page_md5 in seen_hashes:
-        # Already encountered
         return True
-    # Record md5 for future exact duplicates
+    # Record md5 for future exact duplicats
     seen_hashes.add(page_md5)
 
-    # Near-Duplicate Checking
-    # Compute a 64-bit SimHash value for the page's text
+    # Near-Duplicate 
     page_sh = compute_simhash(current_text)
-    # Compare this SimHash to each previosuly stored SimHash
+    # Compare this SimHash to each previously stored SimHash
     # If any are within the Hamming distance, it is a near-duplicate
     for stored_sh in seen_simhashes:
         # Get hamming distance of the two pages
         dist = hamming_distance(page_sh, stored_sh)
         if dist <= simhash_threshhold:
-            #Is a near duplicate
+            # Is a near duplicate
             return True
-        
     # Store new simhash if not a near-duplicate for future comparsions
     seen_simhashes.append(page_sh)
     # Page is unique
     return False
 
 def decideWhetherToExtractInfo(resp, url) -> bool:
-    """
+    """   
     Decide if this page is worth extracting (status, size, type, robots)
     """
-
     # Must return 200 resp status
     if resp.status != 200:
         return False
-    
+
     # Must have a valid raw_response
     if resp.raw_response is None:
         return False
-    
+
     # Content must be text and contain 'utf-8'
     content_type = resp.raw_response.headers.get("Content-Type", "").lower()
-    if not re.match(r"text/.*", content_type) or "utf-8" not in content_type:
+    # Accept text/* pages, ignoring the 'utf-8' substring
+    if not re.match(r"text/.*", content_type):
         return False
-    
-    # Check for URL Size
+
+    # Check page size
     if not check_URLSize(url, resp):
         return False
-    
-    # Check for robots.txt
+
+    # Check robots
     if not checkRobotFile(url):
         return False
 
     return True
 
-###############################
-# ------ Word Counting ------ #
-############################### 
+#################################
+# -------- WORD COUNTING -------#
+#################################
+
 def checkForContent(allText) -> list[str]:
     """
-    Receives allText from a webpage
-    Strips leading and trailing whitespace
-    Return list of raw tokens
+    Strip whitespace and split on spaces,
+    returns raw tokens.
     """
     return allText.strip().split()
 
@@ -283,120 +303,128 @@ def all_count(parsedText, counter) -> int:
     Counts valid words in a list of parsed tokens
     Increments for each valid word
     """
-    for word in parsedText: 
-        # Convert token to lowercase for processing
+    for word in parsedText:
+        # Conver token to lowercase for processing
         word_lower = word.lower()
         # Extract only alphabetic sequences
         valid_tokens = re.findall(alphanumerical_Words, word_lower)
         for t in valid_tokens:
-            # Skip short tokens and words in stop_Words list
-            if len(t) >= 2 and t not in stop_Words:
-                # Increase word's frequency 
+            # Skip short tokens and words in STOP_WORDS list
+            if len(t) >= 2 and t not in STOP_WORDS:
+                # Increase word's frequency
                 count_Words[t] += 1
-                # Increment total word counter for the page
+                #Increment total word counter for the page
                 counter += 1
     return counter
 
-############################
-# ---- get Urls -----#
-############################
+#################################
+# -------- GET ALL URLS --------#
+#################################
+
 def getAllUrls(soup) -> list:
     """
     Extract links from anchor tags, remove the fragments
+    track uniqueness, return as list.
     """
     # Create a set to avoid duplicates
     noDuplicateLinks = set()
     # Keep track of how many unique links are found
     global runningTotal
+    global uniqueCounter
+
     # Loop over all anchor tags in the parsed HTML
     for item in soup.findAll('a'):
         # Extract the anchor attribute
         href = item.get('href')
-        if href: 
+        if href:
             # Use urlparse to see if there is a URL fragment
             fragment = urlparse(href).fragment
             if fragment:
                 # Split the # if there is a fragment
                 href = href.split("#")[0]
-            # Access uniqueCounter
-            global uniqueCounter 
-            # If we have never seen the link before, add link
+            # If we have never seen the the link before, add link
             if href not in uniqueCounter:
                 uniqueCounter.append(href)
                 # Increment the global running total of discovered links
                 runningTotal += 1
             # Add to local set to avoid duplicates in this function
             noDuplicateLinks.add(href)
+
     return list(noDuplicateLinks)
 
-#########################
-#------- Robots.txt --- #
-#########################
-
-robot_parsers = {}
+#################################
+# --------- ROBOTS.TXT ---------#
+#################################
 
 def checkRobotFile(url) -> bool:
     """
-    Checks if the crawler is allowed to crawl or not
+    Parse domain and check if the crawler is allowed to crawl or not
     """
     # If domain does not exist in the scope
     domain = get_domain(url)
     if not domain:
         return True
 
-    # Create RobotFileParser
-    rp = RobotFileParser()
-    rp.set_url(urljoin(domain, "/robots.txt"))
-    try:
-        # Read robots.txt from domain
-        rp.read()
-    # Error handling
-    except Exception:
+    # Create Robot Parser
+    if domain not in robot_parsers:
+        rp = RobotFileParser()
+        rp.set_url(urljoin(domain, "/robots.txt"))
+        try:
+            # Read robots.txt from domain
+            rp.read()
+        # Error handling
+        except Exception:
+            robot_parsers[domain] = rp
+            # Return true to crawl
+            return True
         robot_parsers[domain] = rp
-        # Return true to crawl
-        return True
-    # Check if user age can fetch this 'url'
+
+    rp = robot_parsers[domain]
     return rp.can_fetch("*", url)
 
 def get_domain(url: str) -> str:
     """
-    Return scheme://netloc for a given URL
+    Return scheme://netloc
     """
     parsed = urlparse(url)
     if parsed.scheme and parsed.netloc:
         return f"{parsed.scheme}://{parsed.netloc}"
     return ""
 
-############################
-# ---- Check URL Size -----#
-############################
-def check_URLSIZE(url, resp, minSize=500, maxSize = (35*1024*1024)):
+#################################
+# -------- CHECK URL SIZE ------#
+#################################
+
+def check_URLSize(url, resp, minSize=500, maxSize=(35*1024*1024)):
     """
-    Skip pages that are < 500 bytes or > 35 MB
+    Skip pages < 500 bytes or > 35 MB
     """
     # Get size of bytes of the response content
     size = len(resp.raw_response.content)
-    #Skip if byes are under 500
+    # Skip if bytes are under 500
     if size < minSize:
+        print(f"[Skipping - Too Small] {url}: {size} bytes.")
         return False
-    #Skip if bytes are over 35 MB
+    # Skip if bytes are over 35 MB
     if size > maxSize:
+        print(f"[Skipping - Too Large] {url}: {size} bytes.")
         return False
     return True
 
-########################
-# ------ Report ------ #
-########################
+#############################
+# --------- REPORT -------- #
+#############################
+
 def count_unique_pages(words_In_Page) -> int:
     """
-    Return the number of unique pages
+    Return # unique pages by defragmenting URLs
     """
     # Create a set to store unique defragmented URLs
     uni_Links = set()
     # Loop over each URL in the words_In_Page map
-    for Link in words_In_Page.values():
+    for link in words_In_Page.values():
         # Parse the link
-        parse_Link = urlparse(Link)
+        parse_Link = urlparse(link)
         # Rebuild the link without query or fragment
         uni_Link = parse_Link.scheme + "://" + parse_Link.netloc + parse_Link.path
         # Add to set
@@ -406,37 +434,33 @@ def count_unique_pages(words_In_Page) -> int:
 
 def longest_page_words(words_In_Page) -> int:
     """
-    Return the max number of words found in any single page
+    Return the maximum word count among pages in 'words_In_Page'.
     """
     # If no pages are present, return 0
     if not words_In_Page:
         return 0
-    # Otherwise the key with the highest value is the max word count
+    # Otherwise the key with the highest value is the max word
     return max(words_In_Page.keys())
 
-def longest_page(nnumberOfWords, words_In_Page) -> str:
+def longest_page(numberOfWords, words_In_Page) -> str:
     """
-    Return the page that has the highest max word count
+    Return the URL that has 'numberOfWords' count.
     """
-    # Find the longest page by word count
-    return words_In_Page.get(nnumberOfWords, "NoLongestPage")
+    # Return the longest page by word count
+    return words_In_Page.get(numberOfWords, "NoLongestPage")
 
 def most_common_words(count_Words) -> dict:
     """
-    Sorts count_Words by frequency descending
-    Return the top 50 words
+    Sort 'count_Words' by frequency descending, return top 50 as dict
     """
-    # Sort through count_Words by descending
     sortedList = sorted(count_Words.items(), key=lambda x: x[1], reverse=True)
-    # Build dictionary of top 50 words
     return {entry[0]: entry[1] for entry in sortedList[:50]}
 
 def getSubDomains(words_In_Page) -> list[tuple[str,int]]:
     """
-    Fin subdomains for 'ics.uci.edu'
-    Return a list of (subdomain_url, count_of_pages).
+    Find subdomains under .ics.uci.edu from 'words_In_Page'.
+    Return list of (subdomain_url, count_of_pages).
     """
-
     # Track how many times each subdomain has a page
     subdomain_counts = defaultdict(int)
     # Keep the unique pages for each subdomain
@@ -453,10 +477,10 @@ def getSubDomains(words_In_Page) -> list[tuple[str,int]]:
             subdomain_counts[sub] += 1
             # Add full URL to subdomain's set of pages
             subdomain_pages[sub].add(url)
-    
-    #Sort subdomains alphabetically by subdomain name
-    sorted_subdomains = sorted(subdomain_counts.items(), key=lambda x: (x[0].lower(), x[1]))
-    # Buil a list of tuples
+
+    # Sort subdomains alphabetically by subdomain name
+    sorted_subdomains = sorted(subdomain_counts.items(),
+                               key=lambda x: (x[0].lower(), x[1]))
     return [
         (f'https://{sub}.ics.uci.edu', len(subdomain_pages[sub]))
         for sub, _ in sorted_subdomains
@@ -464,33 +488,31 @@ def getSubDomains(words_In_Page) -> list[tuple[str,int]]:
 
 def printCrawlerSummary():
     """
-    Print crawler summary
+    Print or save the crawler summary to 'report.txt'.
     """
-    # Open filed for writing, using UTF-8 encoding
-    file = open('report.txt', 'w', encoding='utf-8')
-    file.write('=============== Crawler Report ===============\n\n')
-    file.write("Anver Chou : 91432448")
+    with open('report.txt', 'w', encoding='utf-8') as file:
+        file.write('=============== Crawler Report ===============\n\n')
+        file.write("Anver Chou : 91432448\n\n")
 
-    # Unique Pages
-    file.write(f'Total number of Unique Pages : {len(uniqueCounter)}\n\n')
+        # Unique pages
+        file.write(f'Total number of Unique Pages: {len(uniqueCounter)}\n\n')
 
-    # Longest Page
-    max_words = longest_page_words(words_In_Page)
-    longest_url = longest_page(max_words, words_In_Page)
-    file.write(f'Longest Page: {longest_url} with {max_words} words\n\n')
+        # Longest page
+        max_words = longest_page_words(words_In_Page)
+        longest_url = longest_page(max_words, words_In_Page)
+        file.write(f'Longest Page: {longest_url} with {max_words} words\n\n')
 
-    # Top 50 Words
-    file.write('Top 50 Most Commons Words:\n')
-    top_words = most_common_words(count_Words)
-    for w, c in top_words.items():
-        file.write(f'  {w} -> {c}\n')
-    file.write('\n')
+        # Top 50 words
+        file.write('Top 50 Most Common Words:\n')
+        top_words = most_common_words(count_Words)
+        for w, c in top_words.items():
+            file.write(f'  {w} -> {c}\n')
+        file.write('\n')
 
-    # Subdomains
-    ics_subdomains = getSubDomains(words_In_Page)
-    file.write('Subdomains under ics.uci.edu:\n')
-    for url_sub, c_sub in ics_subdomains:
-        file.write(f' {url_sub}, {c_sub}\n')
-    
-    # Close File
+        # Subdomains
+        ics_subdomains = getSubDomains(words_In_Page)
+        file.write('Subdomains under ics.uci.edu:\n')
+        for url_sub, c_sub in ics_subdomains:
+            file.write(f'  {url_sub}, {c_sub}\n')
+    # Close file
     file.close()
